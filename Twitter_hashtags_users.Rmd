@@ -1,0 +1,353 @@
+---
+title: "Example hashtags and users"
+author: "Morgan"
+date: "12/2/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(rtweet) # for harvesting tweets
+library(tm) # for text mining
+library(dplyr) 
+library(tidyr)
+library(data.table)
+library(ggplot2)
+library(ggthemes)
+library(here)
+library(tidyverse)
+library(tidytext)
+library(hms)#date and time
+library(lubridate)#date and time
+library(glue)# Data Wrangling and Visualization
+library(cowplot)
+library(magrittr)
+library(plotly)
+library(tidyverse)
+library(tidytext)
+library(widyr)# Data Wrangling and Visualization
+library(tidytext)# Text Mining
+library(tm)
+library(wordcloud)# Text Mining
+library(igraph)# Network Analysis
+library(networkD3)# Network Visualization (D3.js)
+library(ngram)# Network Visualization (D3.js)
+library(syuzhet)# Sentiment analysis
+library(ggraph)# misc libraries nathan uses
+library(reshape2)
+library(devtools)
+library(SnowballC)# misc libraries nathan uses
+```
+
+Now that I've gotten myself acclimated, lets check into some of the assertions made by Visoughi (2008) regarding false news and the spread of misinformation
+He claimed that "false news" spreaders
+1. have fewer followers 
+2. follow significantly fewer people
+3. are less active 
+4. are verified less often
+5. are newer to Twitter
+
+First I will search some hashtags that are reasonably related to false news (e.g., #climatecult #voterfraud. #voterfraud returned more tweets so I will proceed with that one)
+
+```{r}
+vf <- search_tweets("#voterfraud", n = 5000, include_rts = FALSE, retryonratelimit = FALSE)
+
+#returned 8,262 tweets!
+```
+
+```{r}
+vf <- vf %>% dplyr::select(user_id, created_at,screen_name,quoted_text, quoted_favorite_count, quoted_retweet_count, quoted_followers_count, quoted_friends_count, retweet_text, retweet_created_at, is_retweet, retweet_count, hashtags)
+
+# hashtags are stored in a list tidyr has an answer for that
+vf <- unnest(vf,cols=c(hashtags))
+
+# probably too many to visualize so maybe just look at the top 20
+top.20vf <- vf %>% filter(is.na(hashtags)==F) %>% 
+             group_by(hashtags) %>% summarise(count=n()) %>% 
+               arrange(-count) %>% filter(row_number() < 21) %>% 
+                 arrange(count) %>% mutate(hashtags=factor(hashtags,levels=hashtags))
+```
+
+```{r}
+ggplot(top.20vf,aes(x=hashtags,y=count)) + geom_bar(stat='identity') + 
+  coord_flip() + theme_fivethirtyeight() + 
+    ggtitle(label="Popular hashtags in tweets about #voterfraud",
+            subtitle="hashtag use last 10 days") +
+     theme(plot.title = element_text(size = 14, face = "bold"),
+           plot.subtitle = element_text(face = "italic"))
+```
+#####################################################################
+Attempting to filter by user_id and selet the top 30 info spreaders
+```{r}
+#examine which users are currently tweeting the most using this hashtag. I'm looking at the top 30 here...
+
+vf_tweeters <- vf %>%
+             group_by(user_id) %>% summarise(count=n()) %>% 
+               arrange(-count) %>% filter(row_number() < 31) %>% 
+                 arrange(count) %>% mutate(user_id=factor(user_id,levels=user_id))
+
+#top vf tweeter ID and # of tweets:
+
+#1282157417019711488	816
+#67321785	322
+#117910819	119
+#831680442109665280	97
+#315436946	94
+
+
+#create vector of IDs from top "#voterfraud" tweeters, and lookup their account using the lookup_users function:
+vf_users <- c(1282157417019711488, 67321785, 117910819, 831680442109665280,315436946)
+
+fraud_tweeters <- lookup_users(vf_users)
+
+## How many people do they each follow? # 
+
+count(get_friends("Elizabe24953069")) #589
+count(get_friends("CraigChamberlin")) #87
+count(get_friends("RobinaRobbi")) #2328
+count(get_friends("CarrieGeren")) #206
+count(get_friends("sp1coli1983")) #501
+
+#mean = 742.2
+
+##How many followers do they each have?
+count(get_followers("Elizabe24953069")) #141
+count(get_followers("CraigChamberlin")) #5000 #max
+count(get_followers("RobinaRobbi")) #425
+count(get_followers("CarrieGeren"))  #85
+count(get_followers("sp1coli1983")) #2499
+
+#mean followers = 1630
+
+#how active are these top "#voterfraud" tweeters?
+
+## stream most recent 3200 tweets for each and graph by day
+tmls_vftweeters <- get_timelines(c("CraigChamberlin", "Elizabe24953069", "RobinaRobbi", "CarrieGeren", "sp1coli1983"), n = 3200)
+
+## plot the frequency of tweets for each user over time 
+tmls_vftweeters %>%
+  dplyr::filter(created_at > "2020-11-01") %>%
+  dplyr::group_by(screen_name) %>%
+  ts_plot("days", trim = 1L) +
+  ggplot2::geom_point() +
+  ggplot2::theme_minimal() +
+  ggplot2::theme(
+    legend.title = ggplot2::element_blank(),
+    legend.position = "bottom",
+    plot.title = ggplot2::element_text(face = "bold")) +
+  ggplot2::labs(
+    x = NULL, y = NULL,
+    title = "Frequency of Twitter statuses posted by top #voterfraud tweeters",
+    subtitle = "Twitter status (tweet) counts aggregated by day from November 01 2020",
+    caption = "\nSource: Data collected from Twitter's REST API via rtweet"
+  )
+
+#Most CraigChamberlin with >300, sp1coli983 has ~200 per day, Elizbe ~130 at times...
+```
+
+```{r}
+#verified?
+## select one or more twitter users to lookup
+users <- c(
+  "CraigChamberlin", "Elizabe24953069", "RobinaRobbi", "CarrieGeren", "sp1coli1983"
+)
+
+#is verified?
+vf_verified_tweets <- tmls_vftweeters %>%
+subset(verified) #object is empty. I will also look up each user on Twitter
+
+#I chose to look up each person by hand to see when they created their account
+
+#CraigChamberlin # August 2009 #not verified
+#Elizabe24953069 # July 2020  #not verified
+#RobinaRobbi  #February 2010  #not verified
+#CarrieGeren  #February 2020  #not verified
+#sp1coli1983   #June 2010  #not verified
+
+```
+
+
+```{r}
+t <- search_tweets("#wearamask", n = 5000, include_rts = FALSE, retryonratelimit = TRUE)
+
+wmt <-t
+
+```
+
+
+```{r}
+wmt <- wmt %>% dplyr::select(user_id, created_at,screen_name,quoted_text, quoted_favorite_count, quoted_retweet_count, quoted_followers_count, quoted_friends_count, retweet_text, retweet_created_at, is_retweet, retweet_count, hashtags)
+
+# hashtags are stored in a list tidyr has an answer for that
+wmt <- unnest(wmt,cols=c(hashtags))
+# probably too many to visualize so maybe just look at the top 20
+top.20wmt <- wmt %>% filter(is.na(hashtags)==F) %>% 
+             group_by(hashtags) %>% summarise(count=n()) %>% 
+               arrange(-count) %>% filter(row_number() < 21) %>%
+                 arrange(count) %>% mutate(hashtags=factor(hashtags,levels=hashtags))
+```
+
+```{r}
+
+ggplot(top.20wmt,aes(x=hashtags,y=count)) + geom_bar(stat='identity') + 
+  coord_flip() + theme_fivethirtyeight() + 
+    ggtitle(label="Popular hashtags in tweets about #wearamask",
+            subtitle="hashtag use last 10 days") +
+     theme(plot.title = element_text(size = 14, face = "bold"),
+           plot.subtitle = element_text(face = "italic"))
+```
+
+```{r}
+
+wmusers <- wmt %>%
+             group_by(user_id) %>% summarise(count=n()) %>% 
+               arrange(-count) %>% filter(row_number() < 31) %>%
+                 arrange(count) %>% mutate(user_id=factor(user_id,levels=user_id))
+
+#top 5 users:
+#1263925248317173760	#916
+#388368711	#646
+#864999784049803264	#608
+#73747558	#511
+#252563614	#490
+
+
+users2 <- c(1263925248317173760, 388368711,864999784049803264, 
+          73747558,252563614)
+           
+wm_tweeters <- lookup_users(c(users2))
+
+
+## How many people do they each follow? # 
+count(get_friends("Starbright_2")) #898
+count(get_friends("ChimpReports")) #1069
+count(get_friends("Bompi_Tortilli")) #1762
+count(get_friends("GreggMasters")) #1496
+count(get_friends("CapeTownTrains")) #932
+
+##How many followers do they each have?
+count(get_followers("Starbright_2")) #23
+count(get_followers("ChimpReports")) #5000
+count(get_followers("Bompi_Tortilli")) #219
+count(get_followers("GreggMasters")) #3196
+count(get_followers("CapeTownTrains")) #5000
+
+#how active are these users?
+
+## stream most recent 3200 tweets for each and graph by day
+
+tmls_wmtweeters <- get_timelines(c("Starbright_2", "ChimpReports", "Bompi_Tortilli", "GreggMasters", "CapeTownTrains"), n = 3200)
+
+## plot the frequency of tweets for each user over time
+tmls_wmtweeters %>%
+  dplyr::filter(created_at > "2020-11-01") %>%
+  dplyr::group_by(screen_name) %>%
+  ts_plot("days", trim = 1L) +
+  ggplot2::geom_point() +
+  ggplot2::theme_minimal() +
+  ggplot2::theme(
+    legend.title = ggplot2::element_blank(),
+    legend.position = "bottom",
+    plot.title = ggplot2::element_text(face = "bold")) +
+  ggplot2::labs(
+    x = NULL, y = NULL,
+    title = "Frequency of Twitter statuses posted by news tweeters",
+    subtitle = "Twitter status (tweet) counts aggregated by day from November 2020",
+    caption = "\nSource: Data collected from Twitter's REST API via rtweet"
+  )
+
+#is verified?
+wm_verified_tweets <- tmls_wmtweeters %>%
+subset(verified) #these are verified
+
+#I chose to look up each person by hand to see when they created their account
+ #Starbright_2 # May 2020
+ #ChimpReports # October 2010 VERIFIED
+ #Bompi_Tortilli #May 2017 
+ #GreggMasters #September 2009 
+ #CapeTownTrains #February 2011
+```
+So -- what about my original research question?
+
+Visoughi (2008) re false news and the spread of misinformation claimed that "false news" spreaders had:
+
+- fewer followers 
+- follow significantly fewer people 
+- were less active 
+- verified less often 
+- newer to Twitter )
+
+**RESULTS In our sample 
+mean followers 
+- voter fraud: 1,630 , wear mask: 2,688
+mean friends 
+- voter fraud: 742, wear mask: 1231.4
+avtivity (graph):
+- voter fraud summary (three frequent tweeters):
+  -CraigChamberlin with >300 
+  -p1coli983 has ~200 per day
+  -Elizbe ~130 at times...
+- wear mask summary (one frequent tweeter):
+  -CapeTownTrains highest daily # <150
+  
+twitter tenure & verification:
+- voter fraud: avg 6.5
+ CraigChamberlin 11 years (August 2009) #not verified
+ Elizabe24953069 < 1 year  (July 2020)  #not verified
+ RobinaRobbi  10 years (February 2010)  #not verified
+ CarrieGeren  <1 year (February 2020)  #not verified
+ #sp1coli1983 10 years (June 2010)  #not verified
+ 
+- wear mask: avg 6.7
+Starbright_2 <1 year (May 2020) #not verified
+ChimpReports  10 years (October 2010) VERIFIED
+Bompi_Tortilli >3 years (May 2017) #not verified
+GreggMasters 11 years (September 2009 ) #not verified
+CapeTownTrains 9 years (February 2011) #not verified
+
+- fewer followers (supported by our sample)
+- follow significantly fewer people (supported by our sample)
+- were less active (NOT supported by our sample)
+- verified less often (supported by our sample)
+- newer to Twitter (marginally supported by our sample, but not by much - distrubutions looks bimodal)
+
+ ##### EXTRA: FUN WITH NETWORKS ##### (code from Michael Kearney)
+See this helpful link: https://mkearney.github.io/nicar_tworkshop/#36
+
+Let's scope out the friend networks for the POIs from each group above...
+
+```{r}
+## get friends of multiple accounts - vf top tweeters
+vf_fds <- get_friends(c("CraigChamberlin", "Elizabe24953069", "RobinaRobbi", "CarrieGeren", "sp1coli1983"))
+## frequency count of accounts followed by the users queried above
+tbl <- table(vf_fds$user_id)
+## subset fds data to only those followed by 3 or more
+vf_fds3 <- subset(vf_fds, user_id %in% names(tbl[tbl > 2L]))
+## convert fds3 to matrix
+mat <- as.matrix(vf_fds3)
+## convert to graph object
+mat <- igraph::graph_from_edgelist(mat)
+## plot network
+vf_network <- plot(mat)
+```
+
+```{r}
+## get friends of multiple accounts - wearmask top tweeters
+wm_fds <- get_friends(c("Starbright_2", "ChimpReports", "Bompi_Tortilli", "GreggMasters", "CapeTownTrains"))
+## frequency count of accounts followed by the users queried above
+tbl2 <- table(wm_fds$user_id)
+## subset fds data to only those followed by 3 or more
+wm_fds3 <- subset(wm_fds, user_id %in% names(tbl2[tbl2 > 2L]))
+## convert fds3 to matrix
+mat2 <- as.matrix(wm_fds3)
+## convert to graph object
+mat2 <- igraph::graph_from_edgelist(mat2)
+## plot network
+wm_network <- plot(mat2)
+```
+
+
+
